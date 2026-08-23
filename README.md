@@ -4,8 +4,6 @@
 
 Android 14 introduces enhanced ADB security which disables and randomises the port used after sleep/reboot, breaking automation setups. Auto ADB Enable automatically re-enables wireless ADB, maintaining remote access for non-interactive devices.
 
-Developed on a Chromecast with Google TV (CCwGTV), results may vary on other hardware. Only works with WiFi - not Ethernet.
-
 > [!WARNING]
 > **SECURITY WARNING:** This application enables Android Debug Bridge (ADB) on your configured port (default 5555), which provides remote access to your device with full system privileges. While ADB connections require RSA key authentication (users must accept the connection on first pairing), **once a computer is authorized, it has permanent unrestricted access** to install applications, access all data, execute shell commands, and take complete control of your device without further prompts. Additionally, the RSA authentication prompt is vulnerable to overlay attacks where malicious apps can trick users into authorizing connections. **This app should ONLY be used on isolated or trusted networks** (such as a home network behind a firewall with no port forwarding) and **NEVER on public WiFi, guest networks, or any network you do not fully control**. Exposing ADB to the internet or untrusted networks can result in complete device compromise if an attacker gains authorization, either through social engineering, overlay attacks, or physical access to previously paired computers. Use this tool only on devices you own and ensure your network is properly secured with a firewall blocking external access.
 
@@ -58,18 +56,6 @@ If pairing fails please open an issue and include your device, version, logs fro
 ```
 adb logcat "adbd:V ADBAutoEnable:V *:S"
 ```
-
-### Permission Not Granted / Auto-Grant Failed
-> [!NOTE]
-> Because of a bug in v.0.3.3, auto-grant status will not be accurately reflected in the web-based gui until after a reboot. Check the logs to see if the grant was successful. 
-
-If auto-grant fails, you can manually grant the permission from a computer:
-
-```bash
-adb shell pm grant com.tpn.adbautoenable android.permission.WRITE_SECURE_SETTINGS
-```
-
-
 
 ### Boot Configuration Not Running
 
