@@ -4,7 +4,6 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.nsd.NsdManager;
 import android.net.nsd.NsdServiceInfo;
-import android.provider.Settings;
 import android.util.Log;
 import fi.iki.elonen.NanoHTTPD;
 import java.io.BufferedReader;
@@ -28,7 +27,6 @@ public class WebServer extends NanoHTTPD {
 
     private final Context context;
     private final AdbHelper adbHelper;
-    private Boolean permissionCached = null;
 
     public WebServer(Context context, int port) {
         super(port);
@@ -133,9 +131,6 @@ public class WebServer extends NanoHTTPD {
                 prefs.edit().putBoolean("is_paired", true).apply();
                 Log.i(TAG, "Web API: Pairing successful");
 
-                //Clear permission cache so it re-checks after self-grant
-                permissionCached = null;
-
                 new Thread(() -> {
                     try {
                         Thread.sleep(2000);
@@ -190,22 +185,9 @@ public class WebServer extends NanoHTTPD {
 
         boolean adbTargetAvailable = checkTargetPortAvailable();
 
-        // Cache permission check - only do it once
-        if (permissionCached == null) {
-            Log.d(TAG, "handleStatus() - checking WRITE_SECURE_SETTINGS permission (cached)");
-            try {
-                Settings.Global.putInt(context.getContentResolver(), "adb_wifi_enabled", 1);
-                permissionCached = true;
-                Log.d(TAG, "handleStatus() - permission check SUCCESS");
-            } catch (SecurityException e) {
-                permissionCached = false;
-                Log.d(TAG, "handleStatus() - permission check FAILED");
-            }
-        }
-
         String json = String.format(Locale.US,
-                "{\"lastStatus\":\"%s\",\"currentPort\":%d,\"isPaired\":%b,\"hasPermission\":%b,\"adb5555Available\":%b,\"targetPort\":%d,\"webServerEnabled\":%b}",
-                lastStatus, currentPort, isPaired, permissionCached, adbTargetAvailable, targetPort, webServerEnabled
+                "{\"lastStatus\":\"%s\",\"currentPort\":%d,\"isPaired\":%b,\"adb5555Available\":%b,\"targetPort\":%d,\"webServerEnabled\":%b}",
+                lastStatus, currentPort, isPaired, adbTargetAvailable, targetPort, webServerEnabled
         );
         Log.d(TAG, "handleStatus() completed");
         return newFixedLengthResponse(Response.Status.OK, "application/json", json);
@@ -290,9 +272,6 @@ public class WebServer extends NanoHTTPD {
     private Response handleReset() {
         try {
             Log.i(TAG, "Web API: Resetting pairing status");
-
-            //Clear permission cache on reset too
-            permissionCached = null;
 
             SharedPreferences prefs = getPrefs();
             prefs.edit()
@@ -577,10 +556,6 @@ public class WebServer extends NanoHTTPD {
                 "        <h2>📊 System Status</h2>\n" +
                 "        <div id=\"status-display\">\n" +
                 "            <div class=\"status-row\">\n" +
-                "                <div class=\"status-label\">Permission:</div>\n" +
-                "                <div class=\"status-value\" id=\"permission-status\">Loading...</div>\n" +
-                "            </div>\n" +
-                "            <div class=\"status-row\">\n" +
                 "                <div class=\"status-label\">Pairing Status:</div>\n" +
                 "                <div class=\"status-value\" id=\"pairing-status\">Loading...</div>\n" +
                 "            </div>\n" +
@@ -624,7 +599,7 @@ public class WebServer extends NanoHTTPD {
                 "    \n" +
                 "    <div class=\"card\" id=\"paired-card\" style=\"display:none\">\n" +
                 "        <h2>✅ Device Paired</h2>\n" +
-                "        <p>Your device is successfully paired and ready to use!</p>\n" +
+                "        <div class=\"instruction\">Your device is successfully paired and ready to use!</div>\n" +
                 "        <button onclick=\"resetPairing()\" class=\"danger\">🔄 Reset Pairing</button>\n" +
                 "        <div id=\"reset-success\" class=\"success\"></div>\n" +
                 "        <div id=\"reset-error\" class=\"error\"></div>\n" +
@@ -708,9 +683,6 @@ public class WebServer extends NanoHTTPD {
                 "            fetch('/api/status')\n" +
                 "                .then(r => r.json())\n" +
                 "                .then(data => {\n" +
-                "                    document.getElementById('permission-status').innerHTML = data.hasPermission ? \n" +
-                "                        '<span class=\"status good\">✓ Granted</span>' : \n" +
-                "                        '<span class=\"status bad\">✗ Not granted</span>';\n" +
                 "                    document.getElementById('pairing-status').innerHTML = data.isPaired ? \n" +
                 "                        '<span class=\"status good\">✓ Paired</span>' : \n" +
                 "                        '<span class=\"status bad\">✗ Not paired</span>';\n" +
