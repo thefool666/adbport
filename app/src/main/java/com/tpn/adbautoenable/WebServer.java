@@ -152,6 +152,19 @@ public class WebServer extends NanoHTTPD {
                         } else {
                             Log.w(TAG, "Failed to self-grant permission, user will need to grant manually");
                         }
+
+                        TclAutostartProtection.Result policy = TclAutostartProtection.apply(
+                                context.getContentResolver(),
+                                context.getPackageName()
+                        );
+                        if (policy.success) {
+                            boolean autoStartAllowed = adbHelper.ensureTclAutoStart(
+                                    deviceIP,
+                                    adbPort,
+                                    context.getPackageName()
+                            );
+                            Log.i(TAG, "TCL AUTO_START configured after pairing: " + autoStartAllowed);
+                        }
                     } catch (Exception e) {
                         Log.e(TAG, "Error during self-grant attempt", e);
                     }

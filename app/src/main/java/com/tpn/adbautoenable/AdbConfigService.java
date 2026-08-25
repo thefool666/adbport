@@ -119,6 +119,7 @@ public class AdbConfigService extends Service {
             );
             startForeground(1, notification);
             Log.i(TAG, "Started foreground service with notification");
+            ensureTclAutostartProtectionAsync();
             // Fix: Ensure wireless debugging is enabled on EVERY service start, not just boot events.
             enableWirelessDebuggingImmediately();
 
@@ -156,6 +157,39 @@ public class AdbConfigService extends Service {
         }
 
         return START_STICKY;
+    }
+
+    private void ensureTclAutostartProtectionAsync() {
+        new Thread(() -> {
+            TclAutostartProtection.Result policy = TclAutostartProtection.apply(
+                    getContentResolver(),
+                    getPackageName()
+            );
+            if (!policy.available) {
+                return;
+            }
+            if (!policy.success) {
+                Log.w(TAG, "TCL AppBootPolicy protection could not be applied");
+                return;
+            }
+
+            SharedPreferences prefs = getPrefs();
+            if (!prefs.getBoolean("is_paired", false)) {
+                Log.i(TAG, "TCL AppBootPolicy applied; ADB pairing is needed for AUTO_START app-op");
+                return;
+            }
+
+            int targetPort = getTargetPort();
+            AdbHelper adbHelper = new AdbHelper(this);
+            boolean allowed = adbHelper.ensureTclAutoStart(
+                    getDeviceIP(),
+                    targetPort,
+                    getPackageName()
+            );
+            if (!allowed) {
+                Log.w(TAG, "TCL AUTO_START app-op could not be verified");
+            }
+        }, "tcl-autostart-protection").start();
     }
 
     @Override
