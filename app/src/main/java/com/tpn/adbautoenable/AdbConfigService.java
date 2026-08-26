@@ -119,6 +119,23 @@ public class AdbConfigService extends Service {
             );
             startForeground(1, notification);
             Log.i(TAG, "Started foreground service with notification");
+
+            // Ensure the web server state matches the user's preference
+            SharedPreferences prefs = getPrefs();
+            if (prefs.getBoolean("web_server_enabled", true)) {
+                // NanoHTTPD's isAlive() checks if the server thread is actively running
+                if (webServer == null || !webServer.isAlive()) {
+                    Log.i(TAG, "Web server enabled but not running, starting it now...");
+                    startWebServer();
+                }
+            } else {
+                if (webServer != null) {
+                    webServer.stop();
+                    webServer = null;
+                    Log.i(TAG, "Web server disabled by preference, ensuring it is stopped");
+                }
+            }
+
             ensureTclAutostartProtectionAsync();
             // Fix: Ensure wireless debugging is enabled on EVERY service start, not just boot events.
             enableWirelessDebuggingImmediately();
