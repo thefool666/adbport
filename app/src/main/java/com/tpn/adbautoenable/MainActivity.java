@@ -21,11 +21,14 @@ public class MainActivity extends Activity {
         SharedPreferences prefs = NetworkUtils.getDeviceProtectedPrefs(this, PREFS_NAME);
         boolean webServerEnabled = prefs.getBoolean("web_server_enabled", true);
 
-        // Start the foreground service to keep web server alive only if enabled
+        // Start or stop the foreground service to manage web server state based on user preference
         if (webServerEnabled) {
             Intent serviceIntent = new Intent(this, AdbConfigService.class);
             serviceIntent.putExtra("boot_config", false);
             startForegroundService(serviceIntent);
+        } else {
+            Intent serviceIntent = new Intent(this, AdbConfigService.class);
+            stopService(serviceIntent);
         }
 
         // Create UI
