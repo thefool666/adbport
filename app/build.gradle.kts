@@ -49,4 +49,6 @@ dependencies {
     implementation(libs.bouncycastle.bcprov)
     implementation(libs.bouncycastle.bcpkix)
     implementation(libs.androidx.annotation)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 }

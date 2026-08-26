@@ -35,6 +35,8 @@ import java.security.cert.X509Certificate;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Date;
+import java.util.Locale;
+import java.nio.charset.StandardCharsets;
 
 public class AdbHelper {
     private static final String TAG = "ADBAutoEnable";
@@ -87,6 +89,51 @@ public class AdbHelper {
             Log.e(TAG, "Connect failed", e);
             return false;
         }
+    }
+
+    public boolean ensureTclAutoStart(String host, int port, String packageName) {
+        if (executeTclAutoStart("127.0.0.1", port, packageName)) {
+            return true;
+        }
+        if (!host.equals("127.0.0.1")) {
+            Log.i(TAG, "TCL auto-start setup failed via loopback, retrying via " + host);
+            return executeTclAutoStart(host, port, packageName);
+        }
+        return false;
+    }
+
+    private boolean executeTclAutoStart(String host, int port, String packageName) {
+        try (SimpleAdbManager manager = new SimpleAdbManager(context)) {
+            manager.connect(host, port);
+            executeShell(manager, "appops set " + packageName + " AUTO_START allow");
+            String state = executeShell(manager, "appops get " + packageName + " AUTO_START");
+            boolean allowed = state.toLowerCase(Locale.ROOT).contains("allow");
+            Log.i(TAG, "TCL AUTO_START allowed: " + allowed);
+            return allowed;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to configure TCL AUTO_START on " + host + ":" + port, e);
+            return false;
+        }
+    }
+
+    private String executeShell(SimpleAdbManager manager, String command) throws Exception {
+        StringBuilder output = new StringBuilder();
+        try (AdbStream stream = manager.openStream("shell:" + command);
+             InputStream inputStream = stream.openInputStream()) {
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+            try {
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    output.append(new String(buffer, 0, bytesRead, StandardCharsets.UTF_8));
+                }
+            } catch (IOException e) {
+                if (!"Stream closed.".equals(e.getMessage())) {
+                    throw e;
+                }
+                Log.d(TAG, "ADB shell command completed with a closed stream");
+            }
+        }
+        return output.toString();
     }
 
     public boolean selfGrantPermission(String host, int port, String packageName, String permission) {
