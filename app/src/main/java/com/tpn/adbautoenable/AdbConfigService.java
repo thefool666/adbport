@@ -75,6 +75,19 @@ public class AdbConfigService extends Service {
     public void onCreate() {
         super.onCreate();
         Log.i(TAG, "AdbConfigService onCreate() called");
+
+        // Log app version and device model for easier debugging
+        String appVersion = "Unknown";
+        try {
+            android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            appVersion = pInfo.versionName;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            Log.e(TAG, "Unable to get package info", e);
+        }
+
+        String deviceInfo = android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL;
+        Log.i(TAG, "Starting ADBAutoEnable v" + appVersion + " on device: " + deviceInfo);
+
         try {
             ensureBootReceiverEnabled();
             createNotificationChannel();
