@@ -3,26 +3,17 @@ plugins {
 }
 
 android {
-    namespace = "com.tpn.adbautoenable"
+    namespace = "cd.fool.adbport"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.tpn.adbautoenable"
+        applicationId = "cd.fool.adbport"
         minSdk = 26
         targetSdk = 35
 
         // Dynamically accept CI properties or fall back to local defaults
-        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 12
-        versionName = project.findProperty("CI_VERSION_NAME") as? String ?: "0.3.3"
-    }
-
-    signingConfigs {
-        create("release") {
-            storeFile = file(System.getenv("KEYSTORE_FILE") ?: "keystore.jks")
-            storePassword = System.getenv("KEYSTORE_PASSWORD")
-            keyAlias = System.getenv("KEY_ALIAS")
-            keyPassword = System.getenv("KEY_PASSWORD")
-        }
+        versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 1
+        versionName = project.findProperty("CI_VERSION_NAME") as? String ?: "1.0.0"
     }
 
     buildTypes {
@@ -32,7 +23,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -43,7 +33,6 @@ android {
 }
 
 dependencies {
-    implementation(libs.nanohttpd)
     implementation(libs.libadb)
     implementation(libs.conscrypt)
     implementation(libs.bouncycastle.bcprov)

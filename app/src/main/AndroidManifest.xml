@@ -1,59 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.tpn.adbautoenable">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Required to receive boot events -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
-    <!-- Required to enable wireless ADB (must be granted manually via 'adb shell pm grant') -->
-    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
-
-    <!-- Required for embedded web server -->
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!-- Required to check WiFi connection and get device IP -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-
-    <!-- Required for mDNS discovery -->
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-
-    <!-- Required for foreground service on Android 9+ and 14+ -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-
-    <!-- Required for notifications on Android 13+ (API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
-        android:directBootAware="true"
-        android:allowBackup="false"
-        android:label="ADB Auto-Enable"
-        android:icon="@android:drawable/ic_dialog_info"
-        android:supportsRtl="true"
-        tools:ignore="DataExtractionRules">
-
-        <service
-            android:name=".AdbConfigService"
-            android:enabled="true"
-            android:exported="false"
-            android:directBootAware="true"
-            android:foregroundServiceType="connectedDevice" />
-
-        <receiver
-            android:name=".BootReceiver"
-            android:enabled="true"
-            android:exported="true"
-            android:directBootAware="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@android:style/Theme.Material.Light">
 
         <activity
-            android:name=".MainActivity"
+            android:name=".PairingActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -61,6 +22,18 @@
             </intent-filter>
         </activity>
 
-    </application>
+        <service
+            android:name=".AdbConfigService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
+        <receiver
+            android:name=".TriggerReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="cd.fool.adbport.TRIGGER" />
+            </intent-filter>
+        </receiver>
+
+    </application>
 </manifest>
