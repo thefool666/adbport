@@ -12,7 +12,6 @@ import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
-
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,14 +32,12 @@ public class AdbConfigService extends Service {
     private static final String MD_PKG = "com.arlosoft.macrodroid";
     private static final String SERVICE_TYPE = "_adb-tls-connect._tcp";
     private static final int DEFAULT_PT = 1608;
-
     private static final String S_OK = "OK", S_PAIR = "PAIR", S_FAIL = "FAIL";
-    private static final String D_PORT  = "端口发现";
-    private static final String D_AUTH  = "连接认证";
-    private static final String D_SW    = "tcpip切换";
-    private static final String D_PAIR  = "配对";
+    private static final String D_PORT = "端口发现";
+    private static final String D_AUTH = "连接认证";
+    private static final String D_SW = "tcpip切换";
+    private static final String D_PAIR = "配对";
     private static final String D_PDEAD = "配对未生效";
-
     private static final int PROBE_DOWN = 0, PROBE_REJECT = 1, PROBE_OK = 2;
 
     private Intent mIntent;
@@ -51,13 +48,14 @@ public class AdbConfigService extends Service {
     public void onCreate() {
         super.onCreate();
         adb = new AdbHelper(this);
-        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "ADB Port",
-                NotificationManager.IMPORTANCE_LOW);
+        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "ADB Port", NotificationManager.IMPORTANCE_LOW);
         getSystemService(NotificationManager.class).createNotificationChannel(ch);
     }
 
     @Override
-    public IBinder onBind(Intent intent) { return null; }
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -66,15 +64,15 @@ public class AdbConfigService extends Service {
             return START_NOT_STICKY;
         }
         mIntent = intent;
-        Result.clear();                       // 清场在解析 extras 之前
+        Result.clear(); // 清场在解析 extras 之前
         startFg("启动...");
         busy = true;
         new Thread(this::run, "adbport-run").start();
-        return START_NOT_STICKY;              // 被杀不重建
+        return START_NOT_STICKY; // 被杀不重建
     }
 
     private void startFg(String text) {
-        Notification n = notif(text);
+        Notification n = notifImpl(text);
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE);
         } else if (Build.VERSION.SDK_INT >= 29) {
@@ -107,7 +105,7 @@ public class AdbConfigService extends Service {
                 String ip = NetworkUtils.getLiveDeviceIP(this);
                 if (!"127.0.0.1".equals(ip)) st = probe(ip, pt);
             }
-            if (st != PROBE_DOWN) {           // 快路径命中：跳过 tcpip/③/①b/①c
+            if (st != PROBE_DOWN) { // 快路径命中：跳过 tcpip/③/①b/①c
                 if (st == PROBE_OK) finish(S_OK, "");
                 else onRejected(pairingMode);
                 return;
@@ -118,7 +116,10 @@ public class AdbConfigService extends Service {
             int port = mdnsDiscover();
 
             // ===== ①c loopback 扫描兜底 =====
-            if (port <= 0) { notif("端口扫描..."); port = scanPorts(); }
+            if (port <= 0) {
+                notif("端口扫描...");
+                port = scanPorts();
+            }
             if (port <= 0) { finish(S_FAIL, D_PORT); return; }
             Log.i(TAG, "adbd found on port " + port);
 
@@ -130,7 +131,7 @@ public class AdbConfigService extends Service {
                 if (!"127.0.0.1".equals(ip)) { h = ip; st = probe(h, port); }
             }
             if (st == PROBE_REJECT) { onRejected(pairingMode); return; }
-            if (st == PROBE_DOWN)   { finish(S_FAIL, D_PORT);  return; }
+            if (st == PROBE_DOWN) { finish(S_FAIL, D_PORT); return; }
 
             notif("切换 tcpip:" + pt + " ...");
             if (!adb.switchToPort(h, port, pt)) { finish(S_FAIL, D_SW); return; }
@@ -144,6 +145,7 @@ public class AdbConfigService extends Service {
             }
             if (st == PROBE_OK) finish(S_OK, "");
             else finish(S_FAIL, D_SW);
+
         } catch (Exception e) {
             Log.e(TAG, "pipeline error", e);
             finish(S_FAIL, D_AUTH);
@@ -164,18 +166,17 @@ public class AdbConfigService extends Service {
 
     // ===== ④ 终态：槽/盘全源 → 广播仅 MD 来源 → 退出。顺序铁律不可调换 =====
     private void finish(String s, String d) {
-        Result.write(s, d);                                  // 1. 槽（MD/UI 都写）
-        Prefs.saveResult(this, s, d);                        // 2. 盘（同上）
-        boolean fromUi = mIntent != null
-                && "ui".equals(mIntent.getStringExtra("src"));
-        if (!fromUi) {                                       // 3. MD 广播：仅 MD 来源
+        Result.write(s, d);            // 1. 槽（MD/UI 都写）
+        Prefs.saveResult(this, s, d);  // 2. 盘（同上）
+        boolean fromUi = mIntent != null && "ui".equals(mIntent.getStringExtra("src"));
+        if (!fromUi) {                 // 3. MD 广播：仅 MD 来源
             Intent out = new Intent(ACTION_OUT);
             out.setPackage(MD_PKG);
             out.putExtra("s", s);
             if (d != null && !d.isEmpty()) out.putExtra("d", d);
             sendBroadcast(out);
         }
-        stopForeground(Service.STOP_FOREGROUND_REMOVE);      // 4. 最后退
+        stopForeground(Service.STOP_FOREGROUND_REMOVE); // 4. 最后退
         stopSelf();
     }
 
@@ -186,7 +187,6 @@ public class AdbConfigService extends Service {
         String deviceIP = NetworkUtils.getLiveDeviceIP(this);
         NsdManager nsd = (NsdManager) getSystemService(Context.NSD_SERVICE);
         if (nsd == null) return -1;
-
         NsdManager.DiscoveryListener listener = new NsdManager.DiscoveryListener() {
             @Override public void onDiscoveryStarted(String type) { }
             @Override public void onStartDiscoveryFailed(String type, int code) { latch.countDown(); }
@@ -202,7 +202,7 @@ public class AdbConfigService extends Service {
                         String host = i.getHost().getHostAddress();
                         if (deviceIP.equals(host)) {
                             found[0] = i.getPort();
-                            latch.countDown();               // 命中即断，不等窗口走完
+                            latch.countDown(); // 命中即断，不等窗口走完
                         }
                     }
                 });
@@ -241,8 +241,11 @@ public class AdbConfigService extends Service {
             });
         }
         pool.shutdown();
-        try { pool.awaitTermination(15, TimeUnit.SECONDS); }
-        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        try {
+            pool.awaitTermination(15, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         return found.get();
     }
 
@@ -253,6 +256,7 @@ public class AdbConfigService extends Service {
             if (nm != null) nm.notify(NOTIF_ID, notifImpl(text));
         } catch (Exception ignored) {}
     }
+
     private Notification notifImpl(String text) {
         return new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("ADB Port").setContentText(text)
@@ -261,8 +265,15 @@ public class AdbConfigService extends Service {
 
     private static int parseInt(String v, int def) {
         if (v == null) return def;
-        try { int n = Integer.parseInt(v.trim()); return n > 0 && n <= 65535 ? n : def; }
-        catch (Exception e) { return def; }
+        try {
+            int n = Integer.parseInt(v.trim());
+            return n > 0 && n <= 65535 ? n : def;
+        } catch (Exception e) {
+            return def;
+        }
     }
-    private String host() { return NetworkUtils.getLiveDeviceIP(this); }
+
+    private String host() {
+        return NetworkUtils.getLiveDeviceIP(this);
+    }
 }
