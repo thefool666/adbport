@@ -21,27 +21,29 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'gradle'
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Build Release APK (unsigned)
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Rename APK file
         run: |
-          OLD_PATH="app/build/outputs/apk/debug/app-debug.apk"
-          NEW_PATH="app/build/outputs/apk/debug/adbport-debug.apk"
+          OLD_PATH="app/build/outputs/apk/release/app-release-unsigned.apk"
+          NEW_PATH="app/build/outputs/apk/release/adbport-release-unsigned.apk"
           if [ -f "$OLD_PATH" ]; then
             mv "$OLD_PATH" "$NEW_PATH"
           else
-            echo "Error: Debug APK not found"
+            echo "Error: Release APK not found"
             exit 1
           fi
 
-      - name: Upload Debug APK
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: adbport-debug
-          path: app/build/outputs/apk/debug/adbport-debug.apk
+          name: adbport-release-unsigned
+          path: app/build/outputs/apk/release/adbport-release-unsigned.apk
