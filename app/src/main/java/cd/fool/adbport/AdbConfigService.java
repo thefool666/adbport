@@ -1,279 +1,225 @@
 package cd.fool.adbport;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.Service;
 import android.content.Context;
-import android.content.Intent;
-import android.content.pm.ServiceInfo;
-import android.net.nsd.NsdManager;
-import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
-import android.os.IBinder;
 import android.util.Log;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+
+import androidx.annotation.NonNull;
+
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.X509v3CertificateBuilder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.operator.ContentSigner;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.conscrypt.Conscrypt;
+
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.security.Security;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Date;
+
+import io.github.muntashirakon.adb.AbsAdbConnectionManager;
 
 /**
- * 单发单收：只认收到的一份 intent，干完回执 stopSelf。
- * 流水线：①a 真连快路径 → ①b mDNS → ①c 扫描 → ② tcpip 切换 → ③ 终裁决 → ④ 终态。
- * 终态双通道：槽/盘全源写入；MD 广播仅 MD 来源（无 src 或 src≠ui）发出。
+ * ADB 协议栈：pair（配对握手）/ connect（连接+认证）/ switchToPort（tcpip 切换）。
+ * 密钥持久于 filesDir。pair 返回 null=成功，否则为 PFAIL 的 d 值（三分类，见类头常量）。
  */
-public class AdbConfigService extends Service {
-
+public class AdbHelper {
     private static final String TAG = "AdbPort";
-    private static final String CHANNEL_ID = "AdbPortChannel";
-    private static final int NOTIF_ID = 1;
-    private static final String ACTION_OUT = "cd.fool.adbport.out";
-    private static final String MD_PKG = "com.arlosoft.macrodroid";
-    private static final String SERVICE_TYPE = "_adb-tls-connect._tcp";
-    private static final int DEFAULT_PT = 1608;
-    private static final String S_OK = "OK", S_PAIR = "PAIR", S_FAIL = "FAIL";
-    private static final String D_PORT = "端口发现";
-    private static final String D_AUTH = "连接认证";
-    private static final String D_SW = "tcpip切换";
-    private static final String D_PAIR = "配对";
-    private static final String D_PDEAD = "配对未生效";
-    private static final int PROBE_DOWN = 0, PROBE_REJECT = 1, PROBE_OK = 2;
 
-    private Intent mIntent;
-    private AdbHelper adb;
-    private volatile boolean busy = false;
+    /** pair 失败三分类（d 值），与回执表一一对应。 */
+    public static final String PAIR_ERR_PORT = "配对：端口不通";
+    public static final String PAIR_ERR_HANDSHAKE = "配对：握手失败";
+    public static final String PAIR_ERR_CODE = "配对：码错误";
 
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        adb = new AdbHelper(this);
-        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "ADB Port", NotificationManager.IMPORTANCE_LOW);
-        getSystemService(NotificationManager.class).createNotificationChannel(ch);
-    }
+    /**
+     * 配对失败关键词表：命中 → 码错误，否则 → 握手失败。
+     * NOTE: 排查期实测后按真实异常信息调优此表（当前为尽力而为的初版）。
+     */
+    private static final String[] CODE_HINTS = {
+            "password", "code", "passcode", "wrong", "invalid", "mismatch", "incorrect", "denied"
+    };
 
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    private final Context context;
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        if (busy) { // 单发单收：执行中忽略并发 intent，物理防重入
-            Log.w(TAG, "busy, duplicate intent ignored");
-            return START_NOT_STICKY;
-        }
-        mIntent = intent;
-        Result.clear(); // 清场在解析 extras 之前
-        startFg("启动...");
-        busy = true;
-        new Thread(this::run, "adbport-run").start();
-        return START_NOT_STICKY; // 被杀不重建
-    }
-
-    private void startFg(String text) {
-        Notification n = notifImpl(text);
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE);
-        } else if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
-        } else {
-            startForeground(NOTIF_ID, n);
-        }
-    }
-
-    private void run() {
+    public AdbHelper(Context context) {
+        this.context = context;
         try {
-            String ptRaw = mIntent == null ? null : mIntent.getStringExtra("pt");
-            int pt = parseInt(ptRaw, DEFAULT_PT);
-            String pp = mIntent == null ? null : mIntent.getStringExtra("pp");
-            String pc = mIntent == null ? null : mIntent.getStringExtra("pc");
-            boolean pairingMode = pc != null && !pc.trim().isEmpty();
-
-            // ===== 配对模式：握手成功后转入常规流水线 =====
-            if (pairingMode) {
-                int ppPort = parseInt(pp, -1);
-                if (ppPort <= 0) { finish(S_FAIL, D_PAIR); return; }
-                notif("配对握手...");
-                if (!adb.pair(host(), ppPort, pc.trim())) { finish(S_FAIL, D_PAIR); return; }
-                Log.i(TAG, "pair ok, continue regular pipeline");
-            }
-
-            // ===== ①a 真连快路径（loopback 优先，退自取 IP）=====
-            int st = probe("127.0.0.1", pt);
-            if (st == PROBE_DOWN) {
-                String ip = NetworkUtils.getLiveDeviceIP(this);
-                if (!"127.0.0.1".equals(ip)) st = probe(ip, pt);
-            }
-            if (st != PROBE_DOWN) { // 快路径命中：跳过 tcpip/③/①b/①c
-                if (st == PROBE_OK) finish(S_OK, "");
-                else onRejected(pairingMode);
-                return;
-            }
-
-            // ===== ①b mDNS 单播（5s 窗口，命中即断，host==自取 IP 过滤）=====
-            notif("mDNS 探测...");
-            int port = mdnsDiscover();
-
-            // ===== ①c loopback 扫描兜底 =====
-            if (port <= 0) {
-                notif("端口扫描...");
-                port = scanPorts();
-            }
-            if (port <= 0) { finish(S_FAIL, D_PORT); return; }
-            Log.i(TAG, "adbd found on port " + port);
-
-            // ===== ② 真连接 + 认证 + 发 tcpip:pt =====
-            String h = "127.0.0.1";
-            st = probe(h, port);
-            if (st == PROBE_DOWN) {
-                String ip = NetworkUtils.getLiveDeviceIP(this);
-                if (!"127.0.0.1".equals(ip)) { h = ip; st = probe(h, port); }
-            }
-            if (st == PROBE_REJECT) { onRejected(pairingMode); return; }
-            if (st == PROBE_DOWN) { finish(S_FAIL, D_PORT); return; }
-
-            notif("切换 tcpip:" + pt + " ...");
-            if (!adb.switchToPort(h, port, pt)) { finish(S_FAIL, D_SW); return; }
-            Prefs.saveLastPort(this, port);
-
-            // ===== ③ 终裁决：真连 pt + 认证 =====
-            st = probe("127.0.0.1", pt);
-            if (st == PROBE_DOWN) {
-                String ip = NetworkUtils.getLiveDeviceIP(this);
-                if (!"127.0.0.1".equals(ip)) st = probe(ip, pt);
-            }
-            if (st == PROBE_OK) finish(S_OK, "");
-            else finish(S_FAIL, D_SW);
-
+            Security.removeProvider("BC");
+            Security.insertProviderAt(new BouncyCastleProvider(), 1);
+            Security.insertProviderAt(Conscrypt.newProvider(), 2);
         } catch (Exception e) {
-            Log.e(TAG, "pipeline error", e);
-            finish(S_FAIL, D_AUTH);
+            Log.e(TAG, "Security providers setup failed", e);
         }
     }
 
-    /** 裸 TCP 判活 + ADB 认证实查。DOWN=端口不活；REJECT=端口活但钥匙不对；OK=全通。 */
-    private int probe(String host, int port) {
-        if (!NetworkUtils.rawTcpOk(host, port, 1500)) return PROBE_DOWN;
-        return adb.connect(host, port) ? PROBE_OK : PROBE_REJECT;
-    }
-
-    /** 防呆：配对模式内认证被拒一律 FAIL(配对未生效)，不报 PAIR，避免死循环弹框。 */
-    private void onRejected(boolean pairingMode) {
-        if (pairingMode) finish(S_FAIL, D_PDEAD);
-        else finish(S_PAIR, "");
-    }
-
-    // ===== ④ 终态：槽/盘全源 → 广播仅 MD 来源 → 退出。顺序铁律不可调换 =====
-    private void finish(String s, String d) {
-        Result.write(s, d);            // 1. 槽（MD/UI 都写）
-        Prefs.saveResult(this, s, d);  // 2. 盘（同上）
-        boolean fromUi = mIntent != null && "ui".equals(mIntent.getStringExtra("src"));
-        if (!fromUi) {                 // 3. MD 广播：仅 MD 来源
-            Intent out = new Intent(ACTION_OUT);
-            out.setPackage(MD_PKG);
-            out.putExtra("s", s);
-            if (d != null && !d.isEmpty()) out.putExtra("d", d);
-            sendBroadcast(out);
+    /**
+     * 无线配对握手（pp=配对服务端口，与 adbd 端口无关）。
+     * 返回 null=成功；否则为 PAIR_ERR_* 分类字符串（端口死活由调用方 rawTcp 前置判定，不经此处）。
+     */
+    public String pair(String host, int port, String code) {
+        try (SimpleAdbManager manager = new SimpleAdbManager(context)) {
+            Log.i(TAG, "pair " + host + ":" + port);
+            manager.pair(host, port, code);
+            Log.i(TAG, "pair ok");
+            return null;
+        } catch (Exception e) {
+            Log.e(TAG, "pair failed", e);
+            return classifyPairError(e);
         }
-        stopForeground(Service.STOP_FOREGROUND_REMOVE); // 4. 最后退
-        stopSelf();
     }
 
-    // ===== ①b mDNS（5s 窗口，命中即断）=====
-    private int mdnsDiscover() {
-        final int[] found = {-1};
-        final CountDownLatch latch = new CountDownLatch(1);
-        String deviceIP = NetworkUtils.getLiveDeviceIP(this);
-        NsdManager nsd = (NsdManager) getSystemService(Context.NSD_SERVICE);
-        if (nsd == null) return -1;
-        NsdManager.DiscoveryListener listener = new NsdManager.DiscoveryListener() {
-            @Override public void onDiscoveryStarted(String type) { }
-            @Override public void onStartDiscoveryFailed(String type, int code) { latch.countDown(); }
-            @Override public void onStopDiscoveryFailed(String type, int code) { }
-            @Override public void onDiscoveryStopped(String type) { }
-            @Override public void onServiceLost(NsdServiceInfo info) { }
-            @Override public void onServiceFound(NsdServiceInfo info) {
-                nsd.resolveService(info, new NsdManager.ResolveListener() {
-                    @Override public void onResolveFailed(NsdServiceInfo i, int c) { }
-                    @Override public void onServiceResolved(NsdServiceInfo i) {
-                        if (found[0] > 0) return;
-                        if (i.getHost() == null) return;
-                        String host = i.getHost().getHostAddress();
-                        if (deviceIP.equals(host)) {
-                            found[0] = i.getPort();
-                            latch.countDown(); // 命中即断，不等窗口走完
-                        }
-                    }
-                });
-            }
-        };
+    /** 码错误分类：关键词命中 → 码错误，其余 → 握手失败（尽力而为，实测后调优 CODE_HINTS）。 */
+    private static String classifyPairError(Exception e) {
+        StringBuilder sb = new StringBuilder();
+        Throwable t = e;
+        while (t != null) {
+            sb.append(t.getMessage() == null ? "" : t.getMessage()).append(' ');
+            t = t.getCause();
+        }
+        String msg = sb.toString().toLowerCase();
+        for (String h : CODE_HINTS) {
+            if (msg.contains(h)) return PAIR_ERR_CODE;
+        }
+        return PAIR_ERR_HANDSHAKE;
+    }
+
+    /** 真连接 + ADB 认证。true = 握手与认证全部通过。 */
+    public boolean connect(String host, int port) {
+        try (SimpleAdbManager manager = new SimpleAdbManager(context)) {
+            manager.connect(host, port);
+            return true;
+        } catch (Exception e) {
+            Log.i(TAG, "connect/auth failed on " + host + ":" + port + " : " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** 在已认证连接上发 tcpip:<targetPort>，等待 adbd 重启（内部睡 3s，F1 补足到 6s）。 */
+    public boolean switchToPort(String host, int port, int targetPort) {
+        SimpleAdbManager manager = null;
         try {
-            nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener);
-            latch.await(5, TimeUnit.SECONDS);
+            manager = new SimpleAdbManager(context);
+            manager.connect(host, port);
+            Thread.sleep(200);
+            Log.i(TAG, "sending tcpip:" + targetPort);
+            try (io.github.muntashirakon.adb.AdbStream stream = manager.openStream("tcpip:" + targetPort);
+                 java.io.InputStream is = stream.openInputStream()) {
+                byte[] buf = new byte[1024];
+                if (is.read(buf) > 0) { /* 吞掉响应即可 */ }
+            } catch (Exception e) {
+                Log.d(TAG, "switchToPort stream end: " + e.getMessage());
+            }
+            Thread.sleep(3000);
+            Log.i(TAG, "switchToPort done");
+            return true;
         } catch (Exception e) {
-            Log.e(TAG, "mdns error", e);
+            Log.e(TAG, "switchToPort failed", e);
+            return false;
         } finally {
-            try { nsd.stopServiceDiscovery(listener); } catch (Exception ignored) {}
+            if (manager != null) try { manager.close(); } catch (Exception ignored) {}
         }
-        return found[0];
     }
 
-    // ===== ①c 扫描（32768–60999 / 64 线程 / 50ms / 15s 封顶 / last_port 快路径）=====
-    private int scanPorts() {
-        int lastPort = Prefs.getLastPort(this);
-        if (lastPort > 0 && adb.connect("127.0.0.1", lastPort)) {
-            Log.i(TAG, "hit last_port " + lastPort);
-            return lastPort;
+    // ======== 密钥/证书管理（SimpleAdbManager）========
+
+    private static class SimpleAdbManager extends AbsAdbConnectionManager {
+        private PrivateKey privateKey;
+        private PublicKey publicKey;
+        private X509Certificate certificate;
+        private final File keyFile;
+        private final File pubKeyFile;
+        private final File certFile;
+
+        SimpleAdbManager(Context context) throws Exception {
+            setApi(Build.VERSION.SDK_INT);
+            keyFile = new File(context.getFilesDir(), "adb_key");
+            pubKeyFile = new File(context.getFilesDir(), "adb_key.pub");
+            certFile = new File(context.getFilesDir(), "adb_cert");
+            loadOrGenerateKeyPair();
         }
-        final int MIN = 32768, MAX = 60999, THREADS = 64, TIMEOUT = 50;
-        final AtomicInteger found = new AtomicInteger(-1);
-        AdbHelper helper = adb;
-        ExecutorService pool = Executors.newFixedThreadPool(THREADS);
-        for (int p = MIN; p <= MAX; p++) {
-            final int port = p;
-            pool.submit(() -> {
-                if (found.get() != -1) return;
-                if (!NetworkUtils.rawTcpOk("127.0.0.1", port, TIMEOUT)) return;
-                if (helper.connect("127.0.0.1", port)) {
-                    found.compareAndSet(-1, port);
+
+        private void loadOrGenerateKeyPair() throws Exception {
+            if (keyFile.exists() && pubKeyFile.exists() && certFile.exists()) {
+                try {
+                    KeyFactory kf = KeyFactory.getInstance("RSA");
+                    privateKey = kf.generatePrivate(new PKCS8EncodedKeySpec(readFileBytes(keyFile)));
+                    publicKey = kf.generatePublic(new X509EncodedKeySpec(readFileBytes(pubKeyFile)));
+                    CertificateFactory cf = CertificateFactory.getInstance("X.509");
+                    certificate = (X509Certificate) cf.generateCertificate(
+                            new ByteArrayInputStream(readFileBytes(certFile)));
+                    return;
+                } catch (Exception e) {
+                    Log.e(TAG, "load keys failed, regenerate", e);
                 }
-            });
+            }
+            generateNewKeyPairAndCert();
         }
-        pool.shutdown();
-        try {
-            pool.awaitTermination(15, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+
+        private byte[] readFileBytes(File f) throws IOException {
+            byte[] data = new byte[(int) f.length()];
+            try (FileInputStream fis = new FileInputStream(f)) {
+                int read = 0;
+                while (read < data.length) {
+                    int n = fis.read(data, read, data.length - read);
+                    if (n < 0) throw new IOException("short read");
+                    read += n;
+                }
+            }
+            return data;
         }
-        return found.get();
-    }
 
-    // ===== 通知 =====
-    private void notif(String text) {
-        try {
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) nm.notify(NOTIF_ID, notifImpl(text));
-        } catch (Exception ignored) {}
-    }
-
-    private Notification notifImpl(String text) {
-        return new Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("ADB Port").setContentText(text)
-                .setSmallIcon(android.R.drawable.ic_menu_preferences).build();
-    }
-
-    private static int parseInt(String v, int def) {
-        if (v == null) return def;
-        try {
-            int n = Integer.parseInt(v.trim());
-            return n > 0 && n <= 65535 ? n : def;
-        } catch (Exception e) {
-            return def;
+        private void writeFileBytes(File f, byte[] data) throws IOException {
+            try (FileOutputStream fos = new FileOutputStream(f)) {
+                fos.write(data);
+            }
         }
-    }
 
-    private String host() {
-        return NetworkUtils.getLiveDeviceIP(this);
+        private void generateNewKeyPairAndCert() throws Exception {
+            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+            keyGen.initialize(2048, new SecureRandom());
+            KeyPair keyPair = keyGen.generateKeyPair();
+            privateKey = keyPair.getPrivate();
+            publicKey = keyPair.getPublic();
+            certificate = generateSelfSignedCertificate(keyPair);
+            writeFileBytes(keyFile, privateKey.getEncoded());
+            writeFileBytes(pubKeyFile, publicKey.getEncoded());
+            writeFileBytes(certFile, certificate.getEncoded());
+        }
+
+        private X509Certificate generateSelfSignedCertificate(KeyPair keyPair) throws Exception {
+            X500Name issuer = new X500Name("CN=adbport");
+            BigInteger serial = BigInteger.valueOf(System.currentTimeMillis());
+            Date notBefore = new Date(System.currentTimeMillis() - 24L * 60 * 60 * 1000);
+            Date notAfter = new Date(System.currentTimeMillis() + 365L * 24 * 60 * 60 * 1000);
+            SubjectPublicKeyInfo spi = SubjectPublicKeyInfo.getInstance(keyPair.getPublic().getEncoded());
+            X509v3CertificateBuilder builder = new X509v3CertificateBuilder(issuer, serial, notBefore, notAfter, issuer, spi);
+            ContentSigner signer = new JcaContentSignerBuilder("SHA256withRSA")
+                    .setProvider("BC").build(keyPair.getPrivate());
+            X509CertificateHolder holder = builder.build(signer);
+            return new JcaX509CertificateConverter().setProvider("BC").getCertificate(holder);
+        }
+
+        @Override @NonNull protected PrivateKey getPrivateKey() { return privateKey; }
+        @Override @NonNull protected Certificate getCertificate() { return certificate; }
+        @Override @NonNull protected String getDeviceName() { return "adbport"; }
     }
 }
