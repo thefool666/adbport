@@ -16,9 +16,6 @@ android {
             abiFilters.add("arm64-v8a")
         }
 
-        // 只保留中英文资源，剔除依赖库里其他语言的翻译资源
-        resourceConfigurations.addAll(listOf("zh", "zh-rCN", "en"))
-
         // Dynamically accept CI properties or fall back to local defaults
         versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.0.0"
@@ -35,6 +32,12 @@ android {
                 "proguard-rules.pro"
             )
         }
+    }
+
+    // 只保留中英文资源，剔除依赖库里其他语言的翻译资源
+    // （AGP 9 新写法；resourceConfigurations 已废弃，上次构建日志中有明确提示）
+    androidResources {
+        localeFilters.addAll(listOf("zh", "en"))
     }
 
     compileOptions {
