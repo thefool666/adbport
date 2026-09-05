@@ -11,14 +11,21 @@ android {
         minSdk = 26
         targetSdk = 35
 
+        // 只打包 arm64 架构的 native 库，其余架构（armeabi-v7a/x86/x86_64）不打进 apk
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
+
         // Dynamically accept CI properties or fall back to local defaults
         versionCode = (project.findProperty("CI_VERSION_CODE") as? String)?.toIntOrNull() ?: 1
-        versionName = project.findProperty("CI_VERSION_NAME") as? String ?: "1.0.0"
+        versionName = (project.findProperty("CI_VERSION_NAME") as? String) ?: "1.0.0"
     }
 
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = false
+            // 开启 R8 代码收缩 + 资源收缩
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
